@@ -2,10 +2,13 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const axios = require("axios");
 const admin = require("../utils/admin");
+const { buildNotificationDoc } = require("../models/notification");
+const { buildSystemLogDoc } = require("../models/gamification");
+const { NotificationType } = require("../models/enums");
 
 const OWM_AIR_BASE = "https://api.openweathermap.org/data/2.5/air_pollution";
 
-// Cache AQI 1 hour — dùng OpenWeatherMap Air Pollution API (cùng key với weather)
+// Cache AQI 1 hour
 exports.getAqi = onCall({ region: "asia-southeast1" }, async (request) => {
   const { lat, lng } = request.data;
   if (typeof lat !== "number" || typeof lng !== "number") {
@@ -25,11 +28,10 @@ exports.getAqi = onCall({ region: "asia-southeast1" }, async (request) => {
     const res = await axios.get(OWM_AIR_BASE, {
       params: { lat, lon: lng, appid: apiKey },
     });
-    // OWM trả { list: [{ main: { aqi: 1-5 }, components: { pm2_5, pm10, no2, o3, ... } }] }
     const raw = res.data.list[0];
     const payload = {
-      aqi: raw.main.aqi,           // 1=Good, 2=Fair, 3=Moderate, 4=Poor, 5=VeryPoor
-      components: raw.components,  // pm2_5, pm10, no2, o3, co, so2, nh3, no
+      aqi: raw.main.aqi,
+      components: raw.components,
       dt: raw.dt,
     };
     await admin.firestore().collection("weather_cache").doc(cacheKey).set({
@@ -42,39 +44,32 @@ exports.getAqi = onCall({ region: "asia-southeast1" }, async (request) => {
   }
 });
 
-// Send single FCM notification
+// Send single FCM notification + write to notifications collection
 exports.sendNotification = onCall({ region: "asia-southeast1" }, async (request) => {
-  const { uid, title, body, data } = request.data;
+  const { uid, title, body, type, deepLink, payload } = request.data;
   if (!uid || !title || !body) {
     throw new HttpsError("invalid-argument", "uid, title, body required");
   }
 
-  const userDoc = await admin.firestore().collection("users").doc(uid).get();
+  const db = admin.firestore();
+  const userDoc = await db.collection("users").doc(uid).get();
   if (!userDoc.exists) throw new HttpsError("not-found", "User not found");
 
   const { fcmToken } = userDoc.data();
-  if (!fcmToken) return { sent: false, reason: "no_token" };
 
-  await admin.messaging().send({
-    token: fcmToken,
-    notification: { title, body },
-    data: data || {},
-  });
-
-  await admin.firestore()
-    .collection("notifications")
-    .doc(uid)
-    .collection("items")
-    .add({
-      title,
-      body,
-      type: data?.type || "general",
-      read: false,
-      createdAt: require("firebase-admin/firestore").FieldValue.serverTimestamp(),
-      data: data || {},
+  if (fcmToken) {
+    await admin.messaging().send({
+      token: fcmToken,
+      notification: { title, body },
+      data: payload ? { payload: JSON.stringify(payload) } : {},
     });
+  }
 
-  return { sent: true };
+  await db.collection("notifications").add(
+    buildNotificationDoc(uid, { title, body, type, deepLink, payload })
+  );
+
+  return { sent: !!fcmToken };
 });
 
 // Scheduled daily alert at 6AM Vietnam time
@@ -95,17 +90,16 @@ exports.scheduledWeatherAlert = onSchedule(
       const uid = userDoc.id;
       const userData = userDoc.data();
 
-      if (!userData.fcmToken || !userData.primaryLocation) {
+      if (!userData.fcmToken || !userData.primaryLocationId) {
         totalSkipped++;
         continue;
       }
 
       try {
-        // Spam prevention: check last notification within 20 hours
+        // Spam prevention: skip if notified within last 20 hours
         const recentSnap = await db
           .collection("notifications")
-          .doc(uid)
-          .collection("items")
+          .where("uid", "==", uid)
           .where("createdAt", ">", new Date(Date.now() - 20 * 60 * 60 * 1000))
           .limit(1)
           .get();
@@ -115,7 +109,14 @@ exports.scheduledWeatherAlert = onSchedule(
           continue;
         }
 
-        const { lat, lng } = userData.primaryLocation;
+        // Fetch primary location coords
+        const locationDoc = await db.collection("saved_locations").doc(userData.primaryLocationId).get();
+        if (!locationDoc.exists) {
+          totalSkipped++;
+          continue;
+        }
+        const { lat, lng } = locationDoc.data();
+
         const weatherRes = await axios.get(
           "https://api.openweathermap.org/data/2.5/weather",
           {
@@ -128,17 +129,21 @@ exports.scheduledWeatherAlert = onSchedule(
         );
         const w = weatherRes.data;
         const temp = w.main.temp;
-        const rainProb = w.rain ? 80 : 0;
+        const hasRain = !!(w.rain || w.weather?.[0]?.main === "Rain" || w.weather?.[0]?.main === "Drizzle");
+        const rainProb = hasRain ? 80 : 0;
 
         let alertTitle = null;
         let alertBody = null;
+        let alertType = null;
 
-        if (rainProb > 70) {
+        if (rainProb > 70 && userData.notifRain !== false) {
           alertTitle = "☂️ Dự báo mưa hôm nay";
           alertBody = "Nhớ mang ô khi ra ngoài nhé!";
-        } else if (temp > 37) {
+          alertType = NotificationType.RAIN;
+        } else if (temp > 37 && userData.notifHeat !== false) {
           alertTitle = "🌡️ Nắng gắt hôm nay";
           alertBody = `Nhiệt độ ${Math.round(temp)}°C — uống nhiều nước và hạn chế ra ngoài lúc trưa.`;
+          alertType = NotificationType.HEAT;
         }
 
         if (!alertTitle) {
@@ -149,17 +154,16 @@ exports.scheduledWeatherAlert = onSchedule(
         await admin.messaging().send({
           token: userData.fcmToken,
           notification: { title: alertTitle, body: alertBody },
-          data: { type: "weather_alert" },
         });
 
-        await db.collection("notifications").doc(uid).collection("items").add({
-          title: alertTitle,
-          body: alertBody,
-          type: "weather_alert",
-          read: false,
-          createdAt: require("firebase-admin/firestore").FieldValue.serverTimestamp(),
-          data: { type: "weather_alert" },
-        });
+        await db.collection("notifications").add(
+          buildNotificationDoc(uid, {
+            title: alertTitle,
+            body: alertBody,
+            type: alertType,
+            deepLink: "/home",
+          })
+        );
 
         totalSent++;
       } catch (err) {
@@ -167,10 +171,10 @@ exports.scheduledWeatherAlert = onSchedule(
       }
     }
 
+    const today = new Date().toISOString().split("T")[0];
     await db
       .collection("system_logs")
-      .doc("daily_alert")
-      .collection(new Date().toISOString().split("T")[0])
-      .add({ totalSent, totalSkipped, errors, createdAt: require("firebase-admin/firestore").FieldValue.serverTimestamp() });
+      .doc(`${today}_scheduledWeatherAlert`)
+      .set(buildSystemLogDoc("scheduledWeatherAlert", { totalSent, totalSkipped, errors }));
   }
 );
