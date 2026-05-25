@@ -2,44 +2,72 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // USERS — owner only
     match /users/{uid} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == uid;
+      allow read, write: if request.auth != null && request.auth.uid == uid;
 
       match /saved_locations/{locationId} {
-        allow read, write: if request.auth != null
-                           && request.auth.uid == uid;
+        allow read, write: if request.auth != null && request.auth.uid == uid;
       }
     }
 
+    // NOTIFICATIONS — owner read only, Cloud Functions write
     match /notifications/{uid}/items/{itemId} {
-      allow read: if request.auth != null
-                  && request.auth.uid == uid;
+      allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
 
+    // WEATHER CACHE — Cloud Functions only
     match /weather_cache/{docId} {
       allow read, write: if false;
     }
 
+    // AI CACHE — Cloud Functions only
     match /ai_cache/{docId} {
       allow read, write: if false;
     }
 
+    // GAMIFICATION — owner read, Cloud Functions write
     match /gamification/{uid} {
-      allow read: if request.auth != null 
-                  && request.auth.uid == uid;
+      allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }
 
+    // CHECKIN HISTORY — owner read, Cloud Functions write
+    match /checkin_history/{docId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+      allow write: if false;
+    }
+
+    // COMMUNITY REPORTS — all read, auth create, owner delete
     match /community_reports/{reportId} {
       allow read: if true;
-      allow create: if request.auth != null;
-      allow delete: if request.auth != null 
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null
                     && request.auth.uid == resource.data.uid;
       allow update: if false;
     }
 
+    // REPORT UPVOTES — auth read, Cloud Functions write
+    match /report_upvotes/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // BADGES — all read (public catalog), no write
+    match /badges/{badgeId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // USER BADGES — owner read, Cloud Functions write
+    match /user_badges/{docId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+      allow write: if false;
+    }
+
+    // SYSTEM LOGS — Cloud Functions only
     match /system_logs/{docId} {
       allow read, write: if false;
     }
