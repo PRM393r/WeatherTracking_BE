@@ -25,12 +25,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: functions/package-lock.json
 
       - name: Install dependencies
         working-directory: functions
-        run: npm ci
+        run: npm install
 
       - name: Lint (ESLint)
         working-directory: functions
@@ -57,12 +55,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: functions/package-lock.json
 
       - name: Install dependencies
         working-directory: functions
-        run: npm ci
+        run: npm install
 
       - name: Deploy Cloud Functions
         uses: w9jds/firebase-action@master
