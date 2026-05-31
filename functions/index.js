@@ -25,3 +25,8 @@ exports.scheduledWeatherAlert = notification.scheduledWeatherAlert;
 // AI Suggestion
 const ai = require("./src/ai");
 exports.getAiSuggestion = ai.getAiSuggestion;
+
+// Community Reports
+const community = require("./src/community");
+exports.createReport = community.createReport;
+exports.upvoteReport = community.upvoteReport;

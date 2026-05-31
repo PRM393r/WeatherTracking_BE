@@ -32,9 +32,9 @@ jobs:
         working-directory: functions
         run: npm ci
 
-      - name: Lint (syntax check)
+      - name: Lint (ESLint)
         working-directory: functions
-        run: node --check index.js && node --check src/**/*.js
+        run: npm run lint
 
       - name: Run tests
         working-directory: functions
