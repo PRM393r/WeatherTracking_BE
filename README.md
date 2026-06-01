@@ -350,6 +350,33 @@ firebase deploy
 
 ---
 
+## CI/CD (GitHub Actions)
+
+Pipeline tự động chạy khi push hoặc tạo PR vào `main` / `develop`.
+
+### Workflow: `deploy-functions.yml`
+
+| Job | Trigger | Mô tả |
+|-----|---------|-------|
+| `lint-and-test` | Push & PR → `main`, `develop` | Cài dependencies, kiểm tra cú pháp, chạy tests |
+| `deploy` | Push → `main` only | Deploy Cloud Functions + Firestore rules & indexes |
+
+### Setup GitHub Secret
+
+Để CI/CD có thể deploy, cần thêm secret `FIREBASE_SERVICE_ACCOUNT`:
+
+1. Vào **Firebase Console** → Project Settings → Service Accounts
+2. Click **"Generate New Private Key"** → download JSON file
+3. Vào **GitHub repo** → Settings → Secrets and variables → Actions
+4. Click **"New repository secret"**:
+   - Name: `FIREBASE_SERVICE_ACCOUNT`
+   - Value: paste toàn bộ nội dung file JSON
+5. Save
+
+> ⚠️ **Lưu ý:** Không commit file service account JSON vào repo!
+
+---
+
 ## Kiến trúc & Quy trình hoạt động
 
 ### Tổng quan
