@@ -117,20 +117,22 @@ exports.scheduledWeatherAlert = onSchedule(
         }
         const { lat, lng } = locationDoc.data();
 
-        const weatherRes = await axios.get(
-          "https://api.openweathermap.org/data/2.5/weather",
-          {
-            params: {
-              lat, lon: lng,
-              appid: process.env.OWM_API_KEY,
-              units: "metric",
-            },
-          }
-        );
+        const [weatherRes, aqiRes] = await Promise.all([
+          axios.get("https://api.openweathermap.org/data/2.5/weather", {
+            params: { lat, lon: lng, appid: process.env.OWM_API_KEY, units: "metric" },
+          }),
+          axios.get("https://api.openweathermap.org/data/2.5/air_pollution", {
+            params: { lat, lon: lng, appid: process.env.OWM_API_KEY },
+          }).catch(() => null),
+        ]);
+
         const w = weatherRes.data;
         const temp = w.main.temp;
         const hasRain = !!(w.rain || w.weather?.[0]?.main === "Rain" || w.weather?.[0]?.main === "Drizzle");
         const rainProb = hasRain ? 80 : 0;
+        const aqiValue = aqiRes?.data?.list?.[0]?.main?.aqi ?? null;
+        // OWM AQI scale: 1=Good,2=Fair,3=Moderate,4=Poor,5=VeryPoor — map >3 ≈ US AQI >150
+        const aqiBad = aqiValue !== null && aqiValue >= 4;
 
         let alertTitle = null;
         let alertBody = null;
@@ -144,6 +146,10 @@ exports.scheduledWeatherAlert = onSchedule(
           alertTitle = "🌡️ Nắng gắt hôm nay";
           alertBody = `Nhiệt độ ${Math.round(temp)}°C — uống nhiều nước và hạn chế ra ngoài lúc trưa.`;
           alertType = NotificationType.HEAT;
+        } else if (aqiBad && userData.notifAqi !== false) {
+          alertTitle = "😷 Không khí xấu hôm nay";
+          alertBody = "Chất lượng không khí ở mức kém. Hạn chế ra ngoài và đeo khẩu trang.";
+          alertType = NotificationType.AQI;
         }
 
         if (!alertTitle) {
